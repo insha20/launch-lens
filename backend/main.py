@@ -23,7 +23,7 @@ app = FastAPI(title="LaunchLens API", version="0.7.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "https://launch-lens-now.vercel.app"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
