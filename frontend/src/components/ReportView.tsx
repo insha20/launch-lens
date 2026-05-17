@@ -9,17 +9,28 @@ interface Props {
   report: LaunchLensReport;
 }
 
+const VERDICT_LABELS: Record<string, string> = {
+  "strong signal":      "✅ Strong demand confirmed — good time to build",
+  "moderate signal":    "🟡 Some demand found — validate further before scaling",
+  "weak signal":        "🔴 Weak demand — the problem may not be urgent enough",
+  "insufficient data":  "⚪ Not enough data — try a more specific description",
+};
+
 function ScoreBadge({ score, verdict }: { score: number; verdict: string }) {
   const color =
     score >= 7 ? "bg-green-100 text-green-800 border-green-200" :
     score >= 5 ? "bg-yellow-100 text-yellow-800 border-yellow-200" :
                  "bg-red-100 text-red-800 border-red-200";
 
+  const label = VERDICT_LABELS[verdict.toLowerCase()] ?? verdict;
+
   return (
-    <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-medium ${color}`}>
-      <span className="text-2xl font-bold">{score}</span>
-      <span className="text-xs opacity-75">/10</span>
-      <span className="ml-1 capitalize">{verdict}</span>
+    <div className="space-y-2">
+      <div className={`inline-flex items-center gap-2 px-4 py-2 rounded-full border text-sm font-medium ${color}`}>
+        <span className="text-2xl font-bold">{score}</span>
+        <span className="text-xs opacity-75">/10</span>
+      </div>
+      <p className="text-sm font-medium text-gray-700">{label}</p>
     </div>
   );
 }
@@ -70,9 +81,9 @@ export default function ReportView({ report }: Props) {
   return (
     <div className="space-y-4 w-full max-w-2xl mx-auto pb-16">
 
-      {/* PMF Score — hero element */}
+      {/* Market Fit Score — hero element */}
       {pmf_score && (
-        <Section title="Product-Market Fit Score">
+        <Section title="Market Fit Score">
           <ScoreBadge score={pmf_score.score} verdict={pmf_score.verdict} />
           <p className="text-sm text-gray-600 leading-relaxed">{pmf_score.reasoning}</p>
           <div className="grid grid-cols-2 gap-3 pt-1">
@@ -88,9 +99,9 @@ export default function ReportView({ report }: Props) {
         </Section>
       )}
 
-      {/* ICP Hypotheses */}
+      {/* Who this is for */}
       {product_analysis && (
-        <Section title="ICP Hypotheses">
+        <Section title="Who this is for (and what the evidence says)">
           <p className="text-xs text-gray-500">{product_analysis.problem_being_solved}</p>
           <div className="space-y-2 pt-1">
             {product_analysis.icp_hypotheses.map((h, i) => (
@@ -126,22 +137,22 @@ export default function ReportView({ report }: Props) {
         </Section>
       )}
 
-      {/* GTM Pack */}
+      {/* Launch Copy */}
       {gtm_pack ? (
-        <Section title="GTM Pack">
+        <Section title="Your launch copy">
           <p className="text-xs text-gray-500">
-            Targeting: <span className="font-medium text-gray-700">{gtm_pack.target_persona}</span>
+            Written for: <span className="font-medium text-gray-700">{gtm_pack.target_persona}</span>
           </p>
 
-          {/* Landing Page */}
+          {/* Landing Page Headline */}
           <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 space-y-1">
-            <p className="text-xs font-medium text-indigo-500 uppercase tracking-wide">Landing Page</p>
+            <p className="text-xs font-medium text-indigo-500 uppercase tracking-wide">Landing page headline</p>
             <p className="text-lg font-bold text-gray-900 leading-tight">{gtm_pack.landing_page_headline}</p>
             <p className="text-sm text-gray-600">{gtm_pack.landing_page_subheadline}</p>
           </div>
 
-          <CopyBlock label="Cold DM" content={gtm_pack.cold_dm} />
-          <CopyBlock label="Reddit Post Angle" content={gtm_pack.reddit_post_angle} />
+          <CopyBlock label="Cold outreach message" content={gtm_pack.cold_dm} />
+          <CopyBlock label="How to post about this on Reddit" content={gtm_pack.reddit_post_angle} />
 
           {gtm_pack.community_targets.length > 0 && (
             <div>
@@ -157,7 +168,7 @@ export default function ReportView({ report }: Props) {
       ) : (
         pipeline_status === "complete" && (
           <div className="border border-yellow-200 bg-yellow-50 rounded-xl p-4 text-sm text-yellow-800">
-            <p className="font-medium">GTM copy skipped</p>
+            <p className="font-medium">Launch copy skipped</p>
             <p className="text-xs mt-1 text-yellow-700">
               PMF signal was too weak — collect more community evidence before writing copy.
             </p>

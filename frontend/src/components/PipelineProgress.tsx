@@ -6,11 +6,11 @@
 import { PipelineStage } from "@/types/pipeline";
 
 const STAGES: { key: PipelineStage; label: string; agent: string }[] = [
-  { key: "analyzing",   label: "Analyzing product",        agent: "Product Analyst" },
-  { key: "researching", label: "Searching Reddit + HN",    agent: "Community Researcher" },
-  { key: "synthesizing",label: "Embedding into Chroma",    agent: "RAG Synthesizer" },
-  { key: "scoring",     label: "Scoring PMF",              agent: "PMF Scorer" },
-  { key: "writing",     label: "Writing GTM copy",         agent: "GTM Copywriter" },
+  { key: "analyzing",   label: "Understanding your product",          agent: "Figuring out who this is for and what problem it solves" },
+  { key: "researching", label: "Searching Reddit & Hacker News",      agent: "Finding real conversations where people complain about this problem" },
+  { key: "synthesizing",label: "Reading the evidence",                agent: "Matching community posts to each customer hypothesis" },
+  { key: "scoring",     label: "Scoring market demand",               agent: "How strongly does the evidence confirm real demand?" },
+  { key: "writing",     label: "Writing your launch copy",            agent: "Cold DM, Reddit post, and landing page — in your customers' own words" },
 ];
 
 const ORDER: PipelineStage[] = STAGES.map((s) => s.key);
