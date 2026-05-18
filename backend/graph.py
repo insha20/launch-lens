@@ -131,7 +131,10 @@ async def _retry_on_rate_limit(coro_fn, label: str, max_attempts: int = 4):
             return await coro_fn()
         except Exception as e:
             error_str = str(e)
-            is_rate_limit = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+            is_rate_limit = (
+                "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                or "503" in error_str or "UNAVAILABLE" in error_str
+            )
             if is_rate_limit and attempt < max_attempts - 1:
                 delay_match = re.search(r'retryDelay.*?(\d+)', error_str)
                 wait = int(delay_match.group(1)) + 5 if delay_match else 60
