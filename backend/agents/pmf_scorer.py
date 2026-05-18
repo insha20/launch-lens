@@ -143,15 +143,16 @@ def parse_scoring_response(response: str) -> PMFScore:
             # Only STEP 6 carries a score we care about
             if re.match(r"^step\s*6", lower):
                 collecting = None
-                # Strip "X/10" patterns first so the denominator "10" is
-                # never mistaken for the score (e.g. "Score: 7/10" → "Score: 7")
+                # Normalise all "N/10" and "N out of 10" variants to just "N"
+                # so the denominator 10 is never mistaken for the score.
                 clean = re.sub(r'(\d+)\s*/\s*10', r'\1', stripped)
-                numbers = re.findall(r'\b([1-9]|10)\b', clean)
+                clean = re.sub(r'(\d+)\s+out\s+of\s+10', r'\1', clean, flags=re.IGNORECASE)
+                # Also strip bare " 10" that follows "score" to avoid grabbing it
+                clean = re.sub(r'\b10\b', '', clean)
+                numbers = re.findall(r'\b([1-9])\b', clean)
                 if numbers:
-                    # Take the LAST digit that isn't the step number itself (6)
-                    candidates = [int(n) for n in numbers if n != '6']
-                    if candidates:
-                        result["score"] = candidates[-1]
+                    # Take the FIRST digit found — that's the actual score
+                    result["score"] = int(numbers[0])
             elif re.match(r"^step\s*3", lower):
                 # STEP 3 starts the signal/gap section but the header
                 # line itself is just a description — don't collect it
@@ -161,6 +162,19 @@ def parse_scoring_response(response: str) -> PMFScore:
             continue
 
         # ── Named section headers (can appear outside of STEP N) ─────
+        # Catch "Score: N" or "Score: N/10" on its own line (LLM sometimes
+        # puts the number on the line after STEP 6 instead of inline).
+        m_score = re.match(r"^score\s*[:\-]\s*(.+)", stripped, re.IGNORECASE)
+        if m_score:
+            score_raw = m_score.group(1)
+            score_raw = re.sub(r'(\d+)\s*/\s*10', r'\1', score_raw)
+            score_raw = re.sub(r'(\d+)\s+out\s+of\s+10', r'\1', score_raw, flags=re.IGNORECASE)
+            score_raw = re.sub(r'\b10\b', '', score_raw)
+            nums = re.findall(r'\b([1-9])\b', score_raw)
+            if nums:
+                result["score"] = int(nums[0])
+            continue
+
         if stripped.startswith("REASONING:"):
             collecting = "reasoning"
             inline = stripped.replace("REASONING:", "").strip()
@@ -188,9 +202,10 @@ def parse_scoring_response(response: str) -> PMFScore:
         # ── Sub-headers inside STEP 3 ─────────────────────────────────
         # Match both "Strongest signals:" alone on a line AND
         # "Strongest signals: inline content here" on the same line.
-        # Also tolerates **markdown bold** wrappers the LLM sometimes adds.
+        # Also tolerates **markdown bold** wrappers and em dashes (—) the
+        # LLM uses instead of colons or hyphens.
         bare = re.sub(r"\*+", "", stripped).strip()  # strip ** markers
-        m_signal = re.match(r"^strongest signals?\s*[:\-]\s*(.*)", bare, re.IGNORECASE)
+        m_signal = re.match(r"^strongest signals?\s*(?:[:\-—\u2014])\s*(.*)", bare, re.IGNORECASE)
         if m_signal:
             collecting = "signal"
             inline = m_signal.group(1).strip()
@@ -198,7 +213,7 @@ def parse_scoring_response(response: str) -> PMFScore:
                 signal_lines.append(inline)
             continue
 
-        m_gap = re.match(r"^biggest gaps?\s*[:\-]\s*(.*)", bare, re.IGNORECASE)
+        m_gap = re.match(r"^biggest gaps?\s*(?:[:\-—\u2014])\s*(.*)", bare, re.IGNORECASE)
         if m_gap:
             collecting = "gap"
             inline = m_gap.group(1).strip()
@@ -235,15 +250,29 @@ def parse_scoring_response(response: str) -> PMFScore:
         result["biggest_gap"] = join_bullets(gap_lines)[:600]
 
     # Nuclear fallback — if gap_lines is still empty, scan raw response
-    # for any line that contains "gap" and grab content after the colon
+    # for any line that contains "gap" and grab content after the colon.
+    # Guards: skip STEP N: lines and lines that echo the prompt instruction
+    # (detected by containing both "strongest signals" and "biggest gaps").
+    PROMPT_ECHO = re.compile(r"strongest signals.{0,60}biggest gaps", re.IGNORECASE)
     if not gap_lines:
         for line in lines:
-            bare = re.sub(r"\*+", "", line.strip()).strip()
-            if "gap" in bare.lower() and ":" in bare:
-                content = bare.split(":", 1)[1].strip()
+            bare_fb = re.sub(r"\*+", "", line.strip()).strip()
+            if re.match(r"^step\s+\d+", bare_fb, re.IGNORECASE):
+                continue
+            if PROMPT_ECHO.search(bare_fb):
+                continue
+            if "gap" in bare_fb.lower() and ":" in bare_fb:
+                content = bare_fb.split(":", 1)[1].strip()
                 if content and len(content) > 5:
                     result["biggest_gap"] = content[:600]
                     break
+
+    # Sanitise: if either field still contains the echoed STEP 3 prompt
+    # instruction, replace with a clean no-data message.
+    for field in ("strongest_signal", "biggest_gap"):
+        val = result.get(field, "")
+        if val and PROMPT_ECHO.search(val):
+            result[field] = ""
 
     # Ensure score is valid
     result["score"] = max(1, min(10, result["score"]))
