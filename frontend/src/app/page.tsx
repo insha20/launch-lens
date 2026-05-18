@@ -186,7 +186,9 @@ export default function Home() {
             {/* Error */}
             {stage === "error" && error && (
               <div className="max-w-2xl mx-auto rounded-xl border border-red-700/60 bg-red-950/40 px-5 py-4 space-y-2">
-                <p className="text-sm font-semibold text-red-300">Something went wrong</p>
+                <p className="text-sm font-semibold text-red-300">
+                  {error.includes("quick succession") ? "⏳ Slow down a little" : "Something went wrong"}
+                </p>
                 <p className="text-xs text-red-400/90">{error}</p>
                 <button
                   onClick={handleReset}

@@ -52,6 +52,12 @@ export async function runPipeline(
     });
 
     if (!res.ok) {
+      if (res.status === 429) {
+        throw new ApiError(429, "You've run a few analyses in quick succession. Please wait a minute and try again.");
+      }
+      if (res.status === 504) {
+        throw new ApiError(504, "The analysis timed out — Reddit or HN may be slow right now. Please try again in a moment.");
+      }
       const text = await res.text();
       throw new ApiError(res.status, text);
     }

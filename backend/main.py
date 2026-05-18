@@ -6,11 +6,15 @@ Day 7: Full pipeline wired into /launch route via LangGraph orchestrator
 import os
 import asyncio
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
 import httpx
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Load .env FIRST — before any other imports that might need env vars
 load_dotenv()
@@ -20,6 +24,13 @@ from agents.product_analyst import analyze_product
 from graph import run_pipeline
 
 app = FastAPI(title="LaunchLens API", version="0.7.0")
+
+# ── Rate limiting ─────────────────────────────────────────────
+# 5 requests per minute per IP on /launch (pipeline is expensive).
+# Returns HTTP 429 with a JSON error instead of crashing.
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -199,7 +210,8 @@ async def analyze(payload: ProductInput):
 
 
 @app.post("/launch", response_model=LaunchLensReport)
-async def launch(payload: ProductInput):
+@limiter.limit("5/minute")
+async def launch(request: Request, payload: ProductInput):
     """
     Day 7: Full 5-agent pipeline.
 
@@ -216,7 +228,15 @@ async def launch(payload: ProductInput):
     Tip: test with /docs → POST /launch → paste a product description.
     """
     try:
-        report: LaunchLensReport = await run_pipeline(payload.description)
+        report: LaunchLensReport = await asyncio.wait_for(
+            run_pipeline(payload.description),
+            timeout=120,  # 2 minutes max — handles slow Reddit/HN gracefully
+        )
         return report
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="Pipeline timed out. Reddit or HN may be slow — please try again in a moment."
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pipeline failed: {str(e)}")
