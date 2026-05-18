@@ -277,6 +277,18 @@ def parse_scoring_response(response: str) -> PMFScore:
     # Ensure score is valid
     result["score"] = max(1, min(10, result["score"]))
 
+    # Override verdict based on score — the LLM often writes the wrong label
+    # (e.g. "strong signal" for a 6). Score is the ground truth.
+    score = result["score"]
+    if score >= 8:
+        result["verdict"] = "strong signal"
+    elif score >= 6:
+        result["verdict"] = "moderate signal"
+    elif score >= 4:
+        result["verdict"] = "weak signal"
+    else:
+        result["verdict"] = "insufficient data"
+
     return PMFScore(
         score=result["score"],
         reasoning=result["reasoning"],
