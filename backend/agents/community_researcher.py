@@ -239,26 +239,26 @@ Use the tools to search Reddit and HN. Make at least 3 searches across both plat
 
 async def research_all_hypotheses(analysis: ProductAnalysis) -> list[CommunityEvidence]:
     """
-    Researches all 3 ICP hypotheses sequentially.
-    Sequential (not parallel) to be respectful of Reddit rate limits.
+    Researches all ICP hypotheses in parallel using asyncio.gather.
+    A semaphore caps concurrency at 3 to stay within API rate limits
+    while still running all hypotheses simultaneously.
     """
-    evidence_list = []
+    sem = asyncio.Semaphore(3)
 
-    for i, hypothesis in enumerate(analysis.icp_hypotheses):
-        print(f"\n[Community Researcher] Hypothesis {i+1}/3: {hypothesis.persona[:55]}...")
+    async def research_with_sem(i: int, hypothesis: ICPHypothesis) -> CommunityEvidence:
+        async with sem:
+            print(f"\n[Community Researcher] Hypothesis {i+1}/{len(analysis.icp_hypotheses)}: {hypothesis.persona[:55]}...")
+            try:
+                return await research_hypothesis(hypothesis)
+            except Exception as e:
+                print(f"[Community Researcher] Error on hypothesis {i+1}: {e}")
+                return CommunityEvidence(
+                    hypothesis_persona=hypothesis.persona,
+                    posts=[],
+                    total_posts_found=0,
+                    strongest_signal=f"Research failed: {str(e)}",
+                )
 
-        try:
-            evidence = await research_hypothesis(hypothesis)
-            evidence_list.append(evidence)
-            if i < len(analysis.icp_hypotheses) - 1:
-                await asyncio.sleep(2)      # be respectful of Reddit's API
-        except Exception as e:
-            print(f"[Community Researcher] Error on hypothesis {i+1}: {e}")
-            evidence_list.append(CommunityEvidence(
-                hypothesis_persona=hypothesis.persona,
-                posts=[],
-                total_posts_found=0,
-                strongest_signal=f"Research failed: {str(e)}",
-            ))
-
-    return evidence_list
+    tasks = [research_with_sem(i, h) for i, h in enumerate(analysis.icp_hypotheses)]
+    evidence_list = await asyncio.gather(*tasks)
+    return list(evidence_list)

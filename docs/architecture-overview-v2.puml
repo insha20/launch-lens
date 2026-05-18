@@ -1,0 +1,85 @@
+@startuml architecture-overview-v2
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Inter
+skinparam defaultFontSize 13
+skinparam ArrowColor #374151
+skinparam ArrowThickness 2
+
+skinparam rectangle {
+  RoundCorner 14
+  FontStyle bold
+}
+
+title LaunchLens v2 — Birds-Eye View (Parallel Execution)
+
+' ── Swimlane layout ────────────────────────────────────────
+|User|
+:Paste product idea\nclick **Validate my idea**;
+
+|#EEF2FF|Frontend (Next.js)|
+:Show animated\n5-step progress bar\n+ elapsed timer;
+
+|#FFF7ED|Backend (FastAPI)|
+:Receive POST /launch;
+
+' ── Pipeline stages ───────────────────────────────────────
+|#F0FDF4|Agent 1 — Product Analyst|
+:Read description\nExtract **3 customer profiles**\neach with search queries\nand pain intensity score;
+
+|#FFF7ED|Backend (FastAPI)|
+:Pass all 3 profiles\nto researcher simultaneously;
+
+|#F0FDF4|Agent 2 — Community Researcher ⚡ PARALLEL|
+fork
+  :**Profile 1**\nSearch Reddit + HN\n(~3–5 tool calls);
+fork again
+  :**Profile 2**\nSearch Reddit + HN\n(~3–5 tool calls);
+fork again
+  :**Profile 3**\nSearch Reddit + HN\n(~3–5 tool calls);
+end fork
+:Merge: all 3 evidence sets ready;
+
+|#FFF7ED|Backend (FastAPI)|
+:Embed all posts\ninto shared vector store\n(one pass);
+
+|#F0FDF4|Agent 3 — RAG Synthesizer ⚡ PARALLEL|
+fork
+  :**Profile 1**\nSemantic search\n+ LLM synthesis;
+fork again
+  :**Profile 2**\nSemantic search\n+ LLM synthesis;
+fork again
+  :**Profile 3**\nSemantic search\n+ LLM synthesis;
+end fork
+:Merge: 3 SynthesisResults ready;
+
+|#F0FDF4|Agent 4 — PMF Scorer|
+:Score market demand **1–10**\nwith chain-of-thought reasoning\nTag: strongest signal · biggest gap\nVerdict: strong / moderate /\nweak / insufficient;
+
+|#FFF7ED|Backend (FastAPI)|
+if (Verdict strong\nor moderate?) then (yes)
+  :Route to\nAgent 5;
+else (no → weak signal)
+  :Skip copy\nAssemble early report;
+endif
+
+|#F0FDF4|Agent 5 — GTM Copywriter ⚡ PARALLEL|
+fork
+  :Cold outreach\nmessage;
+fork again
+  :Reddit post\nangle;
+fork again
+  :Landing page\nheadline + sub;
+end fork
+:Merge: GTMPack ready;
+
+|#FFF7ED|Backend (FastAPI)|
+:Assemble **LaunchLensReport**\nReturn JSON to frontend;
+
+|#EEF2FF|Frontend (Next.js)|
+:Render tabbed report:\n**Overview** (score · signal · gap)\n**Audience** (ICP persona cards)\n**Launch Copy** (copy buttons);
+
+|User|
+:Read score · evidence · copy\nLaunch or pivot;
+
+@enduml

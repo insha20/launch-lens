@@ -1,0 +1,162 @@
+@startuml architecture-technical
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Inter
+skinparam defaultFontSize 12
+skinparam ArrowColor #555555
+skinparam NoteBackgroundColor #FFFDE7
+skinparam NoteBorderColor #F9A825
+
+skinparam component {
+  BackgroundColor #EEF2FF
+  BorderColor #6366F1
+  FontColor #1E1B4B
+}
+skinparam database {
+  BackgroundColor #F0FDF4
+  BorderColor #22C55E
+}
+skinparam actor {
+  BackgroundColor #F5F3FF
+  BorderColor #8B5CF6
+}
+skinparam queue {
+  BackgroundColor #FFF7ED
+  BorderColor #F97316
+}
+skinparam rectangle {
+  BackgroundColor #F8FAFC
+  BorderColor #94A3B8
+}
+
+title LaunchLens — Technical Architecture (End-to-End)
+
+actor "User\n(Browser)" as USER
+
+rectangle "Frontend\nNext.js 14 · Vercel" as FE_BOX {
+  component "page.tsx\n(React client)" as PAGE
+  component "api.ts\n(fetch wrapper)" as APITS
+  component "PipelineProgress.tsx" as PROG
+  component "ReportView.tsx" as REPORT
+}
+
+rectangle "Backend\nFastAPI · Railway" as BE_BOX {
+  component "POST /launch\nmain.py" as ROUTE
+
+  rectangle "LangGraph State Machine\ngraph.py · PipelineState TypedDict" as GRAPH {
+    component "Node 1\nproduct_analyst_node" as N1
+    component "Node 2\ncommunity_researcher_node" as N2
+    component "Node 3\nrag_synthesizer_node" as N3
+    component "Node 4\npmf_scorer_node" as N4
+    component "Node 5\ngtm_copywriter_node" as N5
+    component "Node 6\nassemble_report_node" as N6
+    component "_retry_on_rate_limit()\n429 · 503 · backoff" as RETRY
+  }
+
+  rectangle "Agent Layer\nagents/" as AGENTS {
+    component "product_analyst.py\nLangChain · with_structured_output" as A1
+    component "community_researcher.py\nLangGraph prebuilt ReAct" as A2
+    component "rag_synthesizer.py\nChroma retrieval + LLM grounding" as A3
+    component "pmf_scorer.py\nChain-of-thought" as A4
+    component "gtm_copywriter.py\nCustomer-language copy" as A5
+  }
+
+  component "MCP Server\nmcp_server.py" as MCP
+  database "Chroma\n(in-memory / session)" as CHROMA
+  component "rag_pipeline.py\nembed · store · search" as RAG
+}
+
+rectangle "External APIs" as EXT {
+  component "Gemini 2.5 Flash\nLLM calls" as GEMINI
+  component "gemini-embedding-001\nEmbeddings" as EMBED
+  component "Reddit JSON API\npublic · no auth" as REDDIT
+  component "HN Algolia API\nfree · no auth" as HN
+}
+
+rectangle "Pydantic Schemas\nschemas.py" as SCHEMAS {
+  component "ProductAnalysis\n(3 ICP hypotheses)" as S1
+  component "CommunityEvidence\n(posts per hypothesis)" as S2
+  component "SynthesisResult\n(pain_confirmed · confidence)" as S3
+  component "PMFScore\n(score · verdict · reasoning)" as S4
+  component "GTMPack\n(DM · Reddit · landing page)" as S5
+  component "LaunchLensReport\n(final output)" as S6
+}
+
+' ── User flow ──────────────────────────────────────────────
+USER --> PAGE : paste product description\nclick Run Pipeline
+PAGE --> APITS : runPipeline(description)
+APITS --> ROUTE : POST /launch\n{ product_description }
+
+' ── Graph routing ──────────────────────────────────────────
+ROUTE --> N1
+N1 --> A1 : invoke
+A1 --> GEMINI : with_structured_output\nProductAnalysis
+A1 --> S1
+N1 --> N2
+
+N2 --> A2 : invoke
+A2 --> MCP : tool calls\nsearch_reddit · search_hackernews
+MCP --> REDDIT
+MCP --> HN
+A2 --> S2
+N2 --> N3
+
+N3 --> RAG : embed posts
+RAG --> EMBED : batch embed
+RAG --> CHROMA : store vectors
+N3 --> A3 : retrieve + synthesize
+A3 --> CHROMA : semantic search\nper hypothesis
+A3 --> GEMINI : ground synthesis
+A3 --> S3
+N3 --> N4
+
+N4 --> A4
+A4 --> GEMINI : chain-of-thought\nscoring
+A4 --> S4
+N4 -right-> N5 : [verdict: moderate | strong]
+N4 -down-> N6 : [verdict: weak | insufficient]
+
+N5 --> A5
+A5 --> GEMINI : cold DM · Reddit angle\nlanding page
+A5 --> S5
+N5 --> N6
+
+N6 --> S6 : assemble LaunchLensReport
+
+' ── Response path ──────────────────────────────────────────
+S6 --> ROUTE : JSON response
+ROUTE --> APITS : LaunchLensReport
+APITS --> PROG : stage updates
+APITS --> REPORT : render full report
+REPORT --> USER : PMF Score · ICP cards\nlaunch copy
+
+' ── Retry wrapper (side note) ──────────────────────────────
+RETRY .. N1
+RETRY .. N2
+RETRY .. N3
+RETRY .. N4
+RETRY .. N5
+
+note right of RETRY
+  All 5 LLM nodes wrapped.
+  Retries up to 4× on:
+  • 429 RESOURCE_EXHAUSTED
+  • 503 UNAVAILABLE
+  Parses retryDelay from error,
+  falls back to 60s wait.
+end note
+
+note bottom of CHROMA
+  One Chroma instance
+  per session_id.
+  Destroyed after response.
+end note
+
+note right of N4
+  Conditional routing:
+  should_write_copy()
+  moderate/strong → Node 5
+  weak/insufficient → Node 6
+end note
+
+@enduml

@@ -117,31 +117,54 @@ def parse_scoring_response(response: str) -> PMFScore:
 
     Extracts: score (1-10), reasoning, strongest_signal, biggest_gap, verdict
     """
+    import re
+
     lines = response.strip().split("\n")
     result = {
-        "score": 5,                           # default safe middle ground
-        "reasoning": response[:200],           # fallback
+        "score": 5,
+        "reasoning": response[:200],
         "strongest_signal": "",
         "biggest_gap": "",
-        "verdict": "weak signal",             # conservative default
+        "verdict": "weak signal",
     }
 
+    # State machine: track which multi-line section we're currently collecting
+    # Sections switch when we hit a new recognised header.
+    collecting = None   # "signal" | "gap" | "reasoning" | None
+    signal_lines: list[str] = []
+    gap_lines: list[str] = []
+
     for line in lines:
-        line = line.strip()
+        stripped = line.strip()
+        lower = stripped.lower()
 
-        if line.startswith("STEP 6:") or "score" in line.lower():
-            # Try to extract a number 1-10
-            import re
-            numbers = re.findall(r'\b([1-9]|10)\b', line)
-            if numbers:
-                result["score"] = int(numbers[-1])  # take last found number
+        # ── Any STEP N: line ends the current collecting section ──────
+        if re.match(r"^step\s+\d+", lower):
+            # Only STEP 6 carries a score we care about
+            if re.match(r"^step\s*6", lower):
+                collecting = None
+                numbers = re.findall(r'\b([1-9]|10)\b', stripped)
+                if numbers:
+                    result["score"] = int(numbers[-1])
+            elif re.match(r"^step\s*3", lower):
+                # STEP 3 starts the signal/gap section but the header
+                # line itself is just a description — don't collect it
+                collecting = "signal"
+            else:
+                collecting = None
+            continue
 
-        elif line.startswith("REASONING:"):
-            result["reasoning"] = line.replace("REASONING:", "").strip()
+        # ── Named section headers (can appear outside of STEP N) ─────
+        if stripped.startswith("REASONING:"):
+            collecting = "reasoning"
+            inline = stripped.replace("REASONING:", "").strip()
+            if inline:
+                result["reasoning"] = inline
+            continue
 
-        elif line.startswith("VERDICT:"):
-            verdict_text = line.replace("VERDICT:", "").strip().lower()
-            # Normalize verdict
+        if stripped.startswith("VERDICT:"):
+            collecting = None
+            verdict_text = stripped.replace("VERDICT:", "").strip().lower()
             if "strong" in verdict_text:
                 result["verdict"] = "strong signal"
             elif "moderate" in verdict_text:
@@ -150,12 +173,44 @@ def parse_scoring_response(response: str) -> PMFScore:
                 result["verdict"] = "insufficient data"
             else:
                 result["verdict"] = "weak signal"
+            continue
 
-        elif line.startswith("STEP 3:") or "strongest signal" in line.lower():
-            result["strongest_signal"] = line.replace("STEP 3:", "").strip()[:200]
+        if stripped.startswith("NEXT_STEP:"):
+            collecting = None
+            continue
 
-        elif "biggest gap" in line.lower() or "gaps" in line.lower():
-            result["biggest_gap"] = line[:200]
+        # ── Sub-headers inside STEP 3 ─────────────────────────────────
+        if re.match(r"^strongest signals?[:\-]?\s*$", lower):
+            collecting = "signal"
+            continue
+
+        if re.match(r"^biggest gaps?[:\-]?\s*$", lower):
+            collecting = "gap"
+            continue
+
+        # ── Content lines belonging to the current section ────────────
+        if not stripped:
+            # blank line ends collection
+            collecting = None
+            continue
+
+        if collecting == "signal":
+            signal_lines.append(stripped)
+        elif collecting == "gap":
+            gap_lines.append(stripped)
+        elif collecting == "reasoning":
+            result["reasoning"] = (result["reasoning"] + " " + stripped).strip()
+
+    # ── Consolidate collected bullet lines ───────────────────────────
+    def join_bullets(bullet_lines: list[str]) -> str:
+        # Strip leading bullet chars and join into one readable string
+        cleaned = [re.sub(r"^[\*\-\•]\s*", "", b) for b in bullet_lines if b]
+        return " | ".join(cleaned)
+
+    if signal_lines:
+        result["strongest_signal"] = join_bullets(signal_lines)[:400]
+    if gap_lines:
+        result["biggest_gap"] = join_bullets(gap_lines)[:400]
 
     # Ensure score is valid
     result["score"] = max(1, min(10, result["score"]))

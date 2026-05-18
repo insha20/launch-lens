@@ -29,6 +29,7 @@ to 'insufficient data' instead of making up a score."
 """
 
 import os
+import asyncio
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -228,36 +229,36 @@ async def synthesize_all(
 ) -> list[SynthesisResult]:
     """
     Full RAG synthesis pipeline:
-    1. Embed all community evidence into Chroma
-    2. For each ICP hypothesis, retrieve + synthesize
+    1. Embed all community evidence into Chroma (once, shared store)
+    2. Synthesize all ICP hypotheses in parallel against the store
     3. Return list of SynthesisResult objects
-
-    This is the function the LangGraph orchestrator (Day 6) will call.
     """
     print(f"\n[RAG Synthesizer] Embedding {len(evidence_list)} evidence sets...")
 
-    # Step 1: embed all evidence into vector store
+    # Step 1: embed all evidence into a single shared vector store
     store = embed_and_store(evidence_list, session_id)
 
-    # Step 2: synthesize each hypothesis against the store
-    results = []
-    for i, hypothesis in enumerate(analysis.icp_hypotheses):
-        print(f"\n[RAG Synthesizer] Synthesizing hypothesis {i+1}/3...")
+    # Step 2: synthesize all hypotheses concurrently — the store is read-only
+    # from this point so parallel access is safe.
+    async def synthesize_one(i: int, hypothesis) -> SynthesisResult:
+        print(f"\n[RAG Synthesizer] Synthesizing hypothesis {i+1}/{len(analysis.icp_hypotheses)}...")
         try:
             result = await synthesize_hypothesis(hypothesis, store)
-            results.append(result)
             print(f"  ✓ Pain confirmed: {result.pain_confirmed} | "
                   f"Confidence: {result.confidence_score:.1f}")
+            return result
         except Exception as e:
             print(f"  ✗ Synthesis failed: {e}")
-            results.append(SynthesisResult(
+            return SynthesisResult(
                 hypothesis_persona=hypothesis.persona,
                 supporting_quotes=[f"Synthesis error: {str(e)}"],
                 pain_confirmed=False,
                 confidence_score=0.0,
-            ))
+            )
 
-    return results
+    tasks = [synthesize_one(i, h) for i, h in enumerate(analysis.icp_hypotheses)]
+    results = await asyncio.gather(*tasks)
+    return list(results)
 
 
 # needed for parse_synthesis_response

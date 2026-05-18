@@ -1,0 +1,71 @@
+@startuml architecture-overview
+!theme plain
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName Inter
+skinparam defaultFontSize 13
+skinparam ArrowColor #374151
+skinparam ArrowThickness 2
+
+skinparam rectangle {
+  RoundCorner 14
+  FontStyle bold
+}
+
+title LaunchLens — Birds-Eye View
+
+' ── Swimlane layout ────────────────────────────────────────
+|User|
+:Paste product idea\nclick **Run Pipeline**;
+
+|#EEF2FF|Frontend (Vercel)|
+:Show animated\n5-step progress bar;
+
+|#FFF7ED|Backend (Railway)|
+:Receive POST /launch;
+
+|#EEF2FF|Frontend (Vercel)|
+
+|#FFF7ED|Backend (Railway)|
+
+' ── Pipeline stages ───────────────────────────────────────
+|#F0FDF4|Agent 1 — Product Analyst|
+:Read description\nExtract **3 customer profiles**\neach with search queries\nand pain intensity score;
+
+|#FFF7ED|Backend (Railway)|
+:Pass profiles\nto next agent;
+
+|#F0FDF4|Agent 2 — Community Researcher|
+:Search **Reddit + Hacker News**\nfor each customer profile\n(~6–12 API calls in parallel)\nReturn real conversation posts;
+
+|#FFF7ED|Backend (Railway)|
+:Pass posts\nto RAG pipeline;
+
+|#F0FDF4|Agent 3 — Evidence Reader|
+:Embed all posts\ninto in-memory vector store\nSemantically retrieve\nbest evidence per profile\nGround answers in real quotes;
+
+|#FFF7ED|Backend (Railway)|
+:Pass evidence\nto scorer;
+
+|#F0FDF4|Agent 4 — Demand Scorer|
+:Score market demand **1–10**\nwith chain-of-thought reasoning\nTag: strongest signal · biggest gap\nVerdict: strong / moderate /\nweak / insufficient;
+
+|#FFF7ED|Backend (Railway)|
+if (Verdict strong\nor moderate?) then (yes)
+  :Route to\nAgent 5;
+else (no → weak signal)
+  :Skip copy\nAssemble early report;
+endif
+
+|#F0FDF4|Agent 5 — Launch Copywriter|
+:Write in customer's own words:\n• Cold outreach message\n• How to post on Reddit\n• Landing page headline\n  + subheadline;
+
+|#FFF7ED|Backend (Railway)|
+:Assemble **LaunchLensReport**\nReturn JSON to frontend;
+
+|#EEF2FF|Frontend (Vercel)|
+:Render report:\n**Market Fit Score** badge\n**Who this is for** (ICP cards)\n**Your launch copy** (copy buttons);
+
+|User|
+:Read score · evidence · copy\nLaunch or pivot;
+
+@enduml

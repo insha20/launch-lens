@@ -26,6 +26,7 @@ STRUCTURE:
 """
 
 import os
+import asyncio
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -265,39 +266,41 @@ async def generate_gtm_pack(
 
     customer_language = _extract_key_phrases(synthesis_results)
 
-    # Generate cold DM
-    dm_chain = get_cold_dm_chain()
-    cold_dm_response = await dm_chain.ainvoke({
+    # Generate all three copy pieces concurrently
+    dm_chain      = get_cold_dm_chain()
+    reddit_chain  = get_reddit_chain()
+    landing_chain = get_landing_chain()
+
+    dm_args = {
         "problem_solved": analysis.problem_being_solved,
         "persona": best_hypothesis.hypothesis_persona,
         "pain_points": pain_points,
         "customer_language": customer_language,
-    })
-    cold_dm = parse_cold_dm_response(cold_dm_response)
-    print("  ✓ Cold DM generated")
-
-    # Generate Reddit angle
-    reddit_chain = get_reddit_chain()
-    reddit_response = await reddit_chain.ainvoke({
+    }
+    reddit_args = {
         "product_name": analysis.market_category,
         "problem_solved": analysis.problem_being_solved,
         "community": analysis.icp_hypotheses[0].communities[0] if analysis.icp_hypotheses[0].communities else "relevant community",
         "evidence": pain_points,
-    })
-    reddit_angle = parse_reddit_angle_response(reddit_response)
-    print("  ✓ Reddit post angle generated")
-
-    # Generate landing page copy
-    landing_chain = get_landing_chain()
-    landing_response = await landing_chain.ainvoke({
+    }
+    landing_args = {
         "problem": analysis.problem_being_solved,
         "persona": best_hypothesis.hypothesis_persona,
         "evidence_language": customer_language,
         "pain_intensity": best_hypothesis.hypothesis_persona if hasattr(best_hypothesis, 'hypothesis_persona') else "high",
-    })
-    headline = parse_landing_page_response(landing_response, "headline")
+    }
+
+    cold_dm_response, reddit_response, landing_response = await asyncio.gather(
+        dm_chain.ainvoke(dm_args),
+        reddit_chain.ainvoke(reddit_args),
+        landing_chain.ainvoke(landing_args),
+    )
+    print("  ✓ Cold DM, Reddit angle, and landing page generated in parallel")
+
+    cold_dm     = parse_cold_dm_response(cold_dm_response)
+    reddit_angle = parse_reddit_angle_response(reddit_response)
+    headline    = parse_landing_page_response(landing_response, "headline")
     subheadline = parse_landing_page_response(landing_response, "subheadline")
-    print("  ✓ Landing page copy generated")
 
     gtm_pack = GTMPack(
         target_persona=best_hypothesis.hypothesis_persona,

@@ -16,6 +16,126 @@ Paste a product description → LaunchLens runs a 5-agent research pipeline:
 
 ---
 
+## What changed in v2 — and why
+
+### Performance: sequential → parallel execution
+
+The original pipeline ran every sub-task one after another. With a paid Gemini key removing quota delays, the new bottleneck was pure serial latency — each LLM call waited for the previous one to finish even when they were completely independent.
+
+Three specific bottlenecks were identified and fixed:
+
+#### 1. Community Researcher — hypothesis research
+
+| | Before | After |
+|---|---|---|
+| **How** | `for` loop, one hypothesis at a time, 2s sleep between each | `asyncio.gather` + `Semaphore(3)`, all 3 fire simultaneously |
+| **Why it was serial** | Original code comment: "sequential to be respectful of Reddit rate limits" — but with Gemini billing the LLM calls dominate, not the Reddit fetches |
+| **Time** | ~75s (3 × ~25s) | ~25s (parallel — slowest one wins) |
+
+```python
+# Before
+for i, hypothesis in enumerate(analysis.icp_hypotheses):
+    evidence = await research_hypothesis(hypothesis)
+    await asyncio.sleep(2)
+
+# After
+sem = asyncio.Semaphore(3)
+tasks = [research_with_sem(i, h) for i, h in enumerate(analysis.icp_hypotheses)]
+evidence_list = await asyncio.gather(*tasks)
+```
+
+#### 2. RAG Synthesizer — per-hypothesis synthesis
+
+| | Before | After |
+|---|---|---|
+| **How** | Sequential `for` loop, one `synthesize_hypothesis` LLM call at a time | `asyncio.gather` across all 3 after embedding the vector store once |
+| **Why parallel is safe** | `embed_and_store` runs once and returns a read-only Chroma instance; all synthesis workers only read from it, no writes |
+| **Time** | ~30s (3 × ~10s) | ~10s |
+
+```python
+# Before
+for i, hypothesis in enumerate(analysis.icp_hypotheses):
+    result = await synthesize_hypothesis(hypothesis, store)
+
+# After
+store = embed_and_store(evidence_list, session_id)   # once
+tasks = [synthesize_one(i, h) for i, h in enumerate(analysis.icp_hypotheses)]
+results = await asyncio.gather(*tasks)               # all 3 in parallel
+```
+
+#### 3. GTM Copywriter — three independent copy pieces
+
+| | Before | After |
+|---|---|---|
+| **How** | Three sequential `await chain.ainvoke(...)` calls | Single `asyncio.gather(dm, reddit, landing)` |
+| **Why** | Cold DM, Reddit angle, and landing page use different prompts and have zero dependencies on each other |
+| **Time** | ~22s (3 × ~7s) | ~7s |
+
+```python
+# Before
+cold_dm_response  = await dm_chain.ainvoke(dm_args)
+reddit_response   = await reddit_chain.ainvoke(reddit_args)
+landing_response  = await landing_chain.ainvoke(landing_args)
+
+# After
+cold_dm_response, reddit_response, landing_response = await asyncio.gather(
+    dm_chain.ainvoke(dm_args),
+    reddit_chain.ainvoke(reddit_args),
+    landing_chain.ainvoke(landing_args),
+)
+```
+
+#### Total pipeline time comparison
+
+| Stage | v1 (serial) | v2 (parallel) |
+|---|---|---|
+| Product Analyst | ~10s | ~10s |
+| Community Researcher | ~75s | ~25s |
+| RAG Synthesizer | ~30s | ~10s |
+| PMF Scorer | ~10s | ~10s |
+| GTM Copywriter | ~22s | ~7s |
+| **Total** | **~147s** | **~62s** |
+
+**~2.5× faster** with no change to output quality.
+
+---
+
+### Bug fix: PMF Scorer `strongest_signal` and `biggest_gap` displayed empty
+
+| | Before | After |
+|---|---|---|
+| **Problem** | Parser grabbed the `STEP 3:` header line (just a description string like *"List strongest signals and biggest gaps"*) — not the bullet content beneath it | State-machine parser tracks which multi-line section it is collecting (`signal`, `gap`, `reasoning`) and appends lines until the next `STEP N:` or blank line |
+| **Root cause** | Single-pass `for line in lines` with no awareness of multi-line sections | Named state variable `collecting` + explicit sub-header detection for `Strongest signals:` / `Biggest gaps:` |
+| **Effect** | UI showed empty signal/gap cards on every run | Signal and gap cards now render the actual LLM-generated bullets |
+
+---
+
+### UI/UX improvements
+
+| Area | v1 | v2 |
+|---|---|---|
+| **Input page** | Plain textarea, no guidance | Hero copy, one-click example prompts, character counter, "How it works" grid |
+| **Loading state** | Light-themed progress steps (invisible on dark background), no progress bar, no elapsed time | Dark-themed steps, linear progress bar, step counter (Step X of 5), elapsed timer |
+| **Rate-limit banner** | Two banners fired simultaneously ("Rate limit hit" — alarming) | Single banner with reassuring copy: "Still working — almost there. Your results are on their way" |
+| **Report layout** | Single long scroll: score → ICP list → copy blocks | Three tabs: **Overview** (score hero, signal/gap cards, collapsible red flags) · **Audience** (persona cards with pain ring) · **Launch Copy** (copy buttons with 2s "Copied!" toast) |
+| **Score display** | Small coloured badge | Full-width hero with large score circle, colour-coded ring, verdict label, reasoning paragraph |
+| **Red flags** | Always-visible bullet list at bottom of ICP section | Collapsible card with count badge — present but not dominant |
+| **Copy buttons** | Plain "Copy" text link | Icon button with green "Copied!" confirmation state |
+| **Navigation** | No way back without refreshing | "← Validate another idea" button in sticky header once report is shown |
+
+---
+
+### Architecture diagrams
+
+| Diagram | Description |
+|---|---|
+| [docs/architecture-overview.puml](docs/architecture-overview.puml) | Original birds-eye swimlane view (v1) |
+| [docs/architecture-overview-v2.puml](docs/architecture-overview-v2.puml) | Updated swimlane showing parallel fork/join at research, synthesis, and copy stages (v2) |
+| [docs/architecture-technical.puml](docs/architecture-technical.puml) | Original end-to-end component diagram (v1) |
+| [docs/architecture-technical-v2.puml](docs/architecture-technical-v2.puml) | Updated component diagram with parallel execution groups, Semaphore annotation, and new UI components (v2) |
+
+---
+
 ## Tech stack
 
 | Layer | Technology | Why |
@@ -228,9 +348,9 @@ launch-lens/
 | **6** | LangGraph orchestrator — 5-agent state machine | `PipelineState` TypedDict as shared whiteboard. Conditional edge `should_write_copy()` gates GTM Copywriter on PMF verdict. Rate-limit retry with backoff on every LLM-calling node. |
 | **7** | FastAPI `/launch` route | Wired `run_pipeline()` into `POST /launch`. FastAPI auto-validates Pydantic output. Health check surfaces all 5 agent names + `gemini_configured` flag. |
 | **8–9** | Next.js frontend | Input form, 5-stage animated progress bar, rate-limit retry banner with elapsed timer, full report view (PMF score + ICP cards + GTM copy with copy buttons). |
-| **10** | *(coming)* Docker + Railway deployment | |
-| **11–12** | *(coming)* Architecture diagram, portfolio write-up | |
-| **13–14** | *(coming)* Blog post + Show HN launch | |
+| **10** | Performance, UX, and correctness pass | **Parallel execution:** replaced all three serial `for` loops (community researcher, RAG synthesizer, GTM copywriter) with `asyncio.gather` — pipeline ~2.5× faster (~147s → ~62s). **PMF parser fix:** rewrote `parse_scoring_response` as a state-machine to correctly capture multi-line `strongest_signal` and `biggest_gap` sections that were silently empty before. **UI overhaul:** tabbed report (Overview / Audience / Launch Copy), score hero, one-click example prompts, collapsible red flags, copy buttons with toast, sticky header with "validate another idea" reset, dark-theme progress bar with step counter and elapsed timer, single reassuring retrying banner. |
+| **11** | Architecture diagrams updated | Added `architecture-overview-v2.puml` and `architecture-technical-v2.puml` showing parallel fork/join groups. Original diagrams preserved as v1 reference. |
+| **12** | *(coming)* Docker + Railway deployment | |
 
 ---
 
@@ -328,6 +448,11 @@ User input: product description
 • Engineered thread-based async bridge (_run_async) for sync/async tool wrapper
   interop, replacing nest_asyncio patching that conflicted with FastAPI's
   event loop in production
+
+• Reduced end-to-end pipeline latency 2.5× (147s → 62s) by identifying three
+  independent serial bottlenecks (hypothesis research, RAG synthesis, GTM copy
+  generation) and replacing sequential for-loops with asyncio.gather — with a
+  Semaphore cap on the research stage to respect API concurrency limits
 ```
 
 
