@@ -57,7 +57,7 @@ from mcp.server.stdio import stdio_server
 from mcp import types
 
 # LangChain tool wrapper — lets MCP tools be used in LangChain agents
-from langchain_core.tools import tool as langchain_tool
+from langchain_core.tools import tool as langchain_tool, StructuredTool
 
 
 # ─────────────────────────────────────────────────────────────
@@ -271,8 +271,9 @@ async def _search_reddit_async(query: str, subreddit: str = "", limit: int = 8) 
 # Async-native LangChain tool — used by the researcher agent running inside
 # an async context (asyncio.gather). Avoids spawning a new thread + event loop
 # per tool call, which caused Reddit throttling under parallel hypothesis research.
-search_reddit_async = langchain_tool(
-    _search_reddit_async,
+# StructuredTool.from_function(coroutine=...) is the correct API for async tools.
+search_reddit_async = StructuredTool.from_function(
+    coroutine=_search_reddit_async,
     name="search_reddit",
     description=(
         "Search Reddit for posts matching a query. "
@@ -329,8 +330,8 @@ async def _search_hackernews_async(query: str, search_type: str = "story", limit
     return "\n".join(lines)
 
 
-search_hackernews_async = langchain_tool(
-    _search_hackernews_async,
+search_hackernews_async = StructuredTool.from_function(
+    coroutine=_search_hackernews_async,
     name="search_hackernews",
     description=(
         "Search Hacker News for posts matching a query. "

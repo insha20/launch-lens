@@ -108,6 +108,16 @@ cold_dm_response, reddit_response, landing_response = await asyncio.gather(
 | **Root cause** | Single-pass `for line in lines` with no awareness of multi-line sections | Named state variable `collecting` + explicit sub-header detection for `Strongest signals:` / `Biggest gaps:` |
 | **Effect** | UI showed empty signal/gap cards on every run | Signal and gap cards now render the actual LLM-generated bullets |
 
+**Follow-up fixes applied after v2 parser:**
+
+| Bug | Root cause | Fix |
+|---|---|---|
+| `Biggest gaps` still empty after state-machine fix | LLM writes `**Biggest Gaps:** inline text` — `**` markdown bold wrappers prevented the regex from matching the header | Pre-strip all `*` chars from each line with `re.sub(r"\*+", "", stripped)` before running header patterns; inline content after the colon is captured and appended to `gap_lines` directly |
+| `Biggest gaps` reset to empty by blank line | Blank line between `Strongest signals:` bullets and `Biggest gaps:` header was resetting `collecting = None`, so the gap header was never reached | Blank lines only reset `collecting` when the current section is not `"signal"` or `"gap"` |
+| Score always shows `10/10` regardless of verdict | `re.findall(r'\b([1-9]\|10)\b', ...)` on `"Score: 7/10"` returns `['7', '10']`; `numbers[-1]` always picks the denominator `10` | Strip `N/10` patterns to just `N` with `re.sub(r'(\d+)\s*/\s*10', r'\1', ...)` before findall; also exclude the step number `6` from candidates |
+| `Biggest gap` showing pipeline jargon | LLM described the data pipeline (*"no specific quotes were extracted"*) instead of a market insight | Updated `STEP 3` prompt instruction: *"write 1-2 plain sentences as if advising a founder — do NOT reference quotes, data extraction, or internal pipeline terms"* |
+| Signal/gap text truncated mid-sentence | Hard `[:400]` cut | Raised to `[:600]` across signal, gap, and nuclear fallback |
+
 ---
 
 ### UI/UX improvements

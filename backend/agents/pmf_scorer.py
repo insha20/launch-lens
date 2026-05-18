@@ -85,7 +85,7 @@ SCORING RUBRIC:
 YOUR RESPONSE FORMAT:
 STEP 1: Count confirmed hypotheses
 STEP 2: Analyze confidence distribution (mean, spread)
-STEP 3: List strongest signals and biggest gaps
+STEP 3: Strongest signals — what evidence most strongly confirms demand? Biggest gaps — what market, customer, or competitive questions remain unanswered for a founder? Write 1-2 plain sentences for each, as if advising a founder reading this report. Do NOT reference quotes, data extraction, or internal pipeline terms.
 STEP 4: Consider market sizing (from evidence language like "thousands" vs "hundreds")
 STEP 5: Assess differentiation — does the product solve the pain better than existing solutions?
 STEP 6: Assign score 1-10 based on rubric above
@@ -143,9 +143,15 @@ def parse_scoring_response(response: str) -> PMFScore:
             # Only STEP 6 carries a score we care about
             if re.match(r"^step\s*6", lower):
                 collecting = None
-                numbers = re.findall(r'\b([1-9]|10)\b', stripped)
+                # Strip "X/10" patterns first so the denominator "10" is
+                # never mistaken for the score (e.g. "Score: 7/10" → "Score: 7")
+                clean = re.sub(r'(\d+)\s*/\s*10', r'\1', stripped)
+                numbers = re.findall(r'\b([1-9]|10)\b', clean)
                 if numbers:
-                    result["score"] = int(numbers[-1])
+                    # Take the LAST digit that isn't the step number itself (6)
+                    candidates = [int(n) for n in numbers if n != '6']
+                    if candidates:
+                        result["score"] = candidates[-1]
             elif re.match(r"^step\s*3", lower):
                 # STEP 3 starts the signal/gap section but the header
                 # line itself is just a description — don't collect it
@@ -180,18 +186,34 @@ def parse_scoring_response(response: str) -> PMFScore:
             continue
 
         # ── Sub-headers inside STEP 3 ─────────────────────────────────
-        if re.match(r"^strongest signals?[:\-]?\s*$", lower):
+        # Match both "Strongest signals:" alone on a line AND
+        # "Strongest signals: inline content here" on the same line.
+        # Also tolerates **markdown bold** wrappers the LLM sometimes adds.
+        bare = re.sub(r"\*+", "", stripped).strip()  # strip ** markers
+        m_signal = re.match(r"^strongest signals?\s*[:\-]\s*(.*)", bare, re.IGNORECASE)
+        if m_signal:
             collecting = "signal"
+            inline = m_signal.group(1).strip()
+            if inline:
+                signal_lines.append(inline)
             continue
 
-        if re.match(r"^biggest gaps?[:\-]?\s*$", lower):
+        m_gap = re.match(r"^biggest gaps?\s*[:\-]\s*(.*)", bare, re.IGNORECASE)
+        if m_gap:
             collecting = "gap"
+            inline = m_gap.group(1).strip()
+            if inline:
+                gap_lines.append(inline)
             continue
 
         # ── Content lines belonging to the current section ────────────
         if not stripped:
-            # blank line ends collection
-            collecting = None
+            # Blank lines only end collection when we're outside STEP 3's
+            # signal/gap context — avoids losing the gap section when the LLM
+            # puts a blank line between "Strongest signals:" bullets and
+            # "Biggest gaps:" header.
+            if collecting not in ("signal", "gap"):
+                collecting = None
             continue
 
         if collecting == "signal":
@@ -208,9 +230,20 @@ def parse_scoring_response(response: str) -> PMFScore:
         return " | ".join(cleaned)
 
     if signal_lines:
-        result["strongest_signal"] = join_bullets(signal_lines)[:400]
+        result["strongest_signal"] = join_bullets(signal_lines)[:600]
     if gap_lines:
-        result["biggest_gap"] = join_bullets(gap_lines)[:400]
+        result["biggest_gap"] = join_bullets(gap_lines)[:600]
+
+    # Nuclear fallback — if gap_lines is still empty, scan raw response
+    # for any line that contains "gap" and grab content after the colon
+    if not gap_lines:
+        for line in lines:
+            bare = re.sub(r"\*+", "", line.strip()).strip()
+            if "gap" in bare.lower() and ":" in bare:
+                content = bare.split(":", 1)[1].strip()
+                if content and len(content) > 5:
+                    result["biggest_gap"] = content[:600]
+                    break
 
     # Ensure score is valid
     result["score"] = max(1, min(10, result["score"]))
