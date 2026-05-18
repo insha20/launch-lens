@@ -98,7 +98,10 @@ def build_researcher_agent():
         temperature=0.1,
     )
 
-    tools = get_mcp_tools()
+    # async_mode=True returns async-native tool wrappers (search_reddit_async,
+    # search_hackernews_async). LangGraph's create_react_agent with ainvoke()
+    # awaits them directly — no thread spawning, no per-call event-loop overhead.
+    tools = get_mcp_tools(async_mode=True)
 
     # create_react_agent from langgraph.prebuilt — the modern approach
     # prompt= sets the system message for the agent
@@ -246,6 +249,9 @@ async def research_all_hypotheses(analysis: ProductAnalysis) -> list[CommunityEv
     sem = asyncio.Semaphore(3)
 
     async def research_with_sem(i: int, hypothesis: ICPHypothesis) -> CommunityEvidence:
+        # Stagger starts by 600 ms per hypothesis so Reddit's public API
+        # doesn't see all queries land in the same 100 ms window.
+        await asyncio.sleep(i * 0.6)
         async with sem:
             print(f"\n[Community Researcher] Hypothesis {i+1}/{len(analysis.icp_hypotheses)}: {hypothesis.persona[:55]}...")
             try:

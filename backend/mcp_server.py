@@ -228,8 +228,6 @@ def search_reddit(query: str, subreddit: str = "", limit: int = 8) -> str:
         subreddit: Optional specific subreddit to search within (without r/ prefix)
         limit: Number of posts to return (max 25)
     """
-    # LangChain tools must be sync — run the async function safely whether or
-    # not an event loop is already running.
     result = _run_async(_reddit_search(
         query=query,
         subreddit=subreddit if subreddit else None,
@@ -239,7 +237,6 @@ def search_reddit(query: str, subreddit: str = "", limit: int = 8) -> str:
     if not result:
         return f"No Reddit posts found for query: '{query}'"
 
-    # Format as readable text for the LLM
     lines = [f"Reddit search results for '{query}':\n"]
     for i, post in enumerate(result, 1):
         lines.append(
@@ -249,6 +246,44 @@ def search_reddit(query: str, subreddit: str = "", limit: int = 8) -> str:
             f"   {post['body'][:200] + '...' if len(post['body']) > 200 else post['body']}\n"
         )
     return "\n".join(lines)
+
+
+async def _search_reddit_async(query: str, subreddit: str = "", limit: int = 8) -> str:
+    """Async version of search_reddit — called directly by async agents to avoid thread overhead."""
+    result = await _reddit_search(
+        query=query,
+        subreddit=subreddit if subreddit else None,
+        limit=limit,
+    )
+    if not result:
+        return f"No Reddit posts found for query: '{query}'"
+    lines = [f"Reddit search results for '{query}':\n"]
+    for i, post in enumerate(result, 1):
+        lines.append(
+            f"{i}. [{post['subreddit']}] {post['title']}\n"
+            f"   Score: {post['score']} | Comments: {post['num_comments']}\n"
+            f"   URL: {post['url']}\n"
+            f"   {post['body'][:200] + '...' if len(post['body']) > 200 else post['body']}\n"
+        )
+    return "\n".join(lines)
+
+
+# Async-native LangChain tool — used by the researcher agent running inside
+# an async context (asyncio.gather). Avoids spawning a new thread + event loop
+# per tool call, which caused Reddit throttling under parallel hypothesis research.
+search_reddit_async = langchain_tool(
+    _search_reddit_async,
+    name="search_reddit",
+    description=(
+        "Search Reddit for posts matching a query. "
+        "Use this to find real community discussions about a problem or product category. "
+        "Returns post titles, scores, comment counts, and URLs.\n\n"
+        "Args:\n"
+        "    query: Search query — use frustrated customer language, not marketing terms\n"
+        "    subreddit: Optional specific subreddit to search within (without r/ prefix)\n"
+        "    limit: Number of posts to return (max 25)"
+    ),
+)
 
 
 @langchain_tool
@@ -277,6 +312,37 @@ def search_hackernews(query: str, search_type: str = "story", limit: int = 8) ->
             f"   URL: {post['url']}\n"
         )
     return "\n".join(lines)
+
+
+async def _search_hackernews_async(query: str, search_type: str = "story", limit: int = 8) -> str:
+    """Async version of search_hackernews — called directly by async agents."""
+    result = await _hn_search(query=query, limit=limit, search_type=search_type)
+    if not result:
+        return f"No Hacker News posts found for query: '{query}'"
+    lines = [f"Hacker News search results for '{query}' (type: {search_type}):\n"]
+    for i, post in enumerate(result, 1):
+        lines.append(
+            f"{i}. {post['title']}\n"
+            f"   Score: {post['score']} | Comments: {post['num_comments']}\n"
+            f"   URL: {post['url']}\n"
+        )
+    return "\n".join(lines)
+
+
+search_hackernews_async = langchain_tool(
+    _search_hackernews_async,
+    name="search_hackernews",
+    description=(
+        "Search Hacker News for posts matching a query. "
+        "Use 'show_hn' search_type to find products people have launched. "
+        "Use 'story' for general discussions. "
+        "Use 'ask_hn' for questions and pain point discussions.\n\n"
+        "Args:\n"
+        "    query: Search query string\n"
+        "    search_type: One of 'story', 'show_hn', 'ask_hn', 'comment'\n"
+        "    limit: Number of results to return"
+    ),
+)
 
 
 @langchain_tool
@@ -346,18 +412,28 @@ def _run_async(coro):
 # Public interface — used by LangChain agents
 # ─────────────────────────────────────────────────────────────
 
-def get_mcp_tools() -> list:
+def get_mcp_tools(async_mode: bool = False) -> list:
     """
     Returns all MCP tools as a LangChain-compatible list.
 
-    Usage in a LangChain agent:
-        from mcp_server import get_mcp_tools
-        tools = get_mcp_tools()
-        agent = create_react_agent(llm, tools, prompt)
+    Args:
+        async_mode: If True, returns async-native tool objects for
+                    search_reddit and search_hackernews. These are safe to
+                    use inside async contexts (FastAPI, asyncio.gather) because
+                    they await the underlying coroutines directly instead of
+                    spawning a new thread + event loop via _run_async().
+                    LangGraph's create_react_agent with ainvoke() supports
+                    async tools natively — always pass async_mode=True from
+                    async agent pipelines.
 
-    The agent can then call tools by name:
-        search_reddit, search_hackernews, scrape_url, search_web
+    Usage in an async LangChain agent:
+        from mcp_server import get_mcp_tools
+        tools = get_mcp_tools(async_mode=True)
+        agent = create_react_agent(llm, tools, prompt)
+        result = await agent.ainvoke(...)
     """
+    if async_mode:
+        return [search_reddit_async, search_hackernews_async, scrape_url, search_web]
     return [search_reddit, search_hackernews, scrape_url, search_web]
 
 
