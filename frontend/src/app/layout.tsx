@@ -15,6 +15,18 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "LaunchLens — Validate Your Product Idea Before You Build",
   description: "Validate your product idea before you build. LaunchLens uses AI agents to research real community conversations and score your product-market fit in under 90 seconds.",
+  openGraph: {
+    title: "LaunchLens — Validate Your Product Idea Before You Build",
+    description: "Validate your product idea before you build. LaunchLens uses AI agents to research real community conversations and score your product-market fit in under 90 seconds.",
+    url: "https://launch-lens-now.vercel.app",
+    siteName: "LaunchLens",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "LaunchLens — Validate Your Product Idea Before You Build",
+    description: "Validate your product idea before you build. LaunchLens uses AI agents to research real community conversations and score your product-market fit in under 90 seconds.",
+  },
 };
 
 export default function RootLayout({
