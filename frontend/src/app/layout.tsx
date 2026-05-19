@@ -13,8 +13,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LaunchLens — PMF Validator",
-  description: "AI-powered product-market fit validation using Reddit & Hacker News",
+  title: "LaunchLens — Validate Your Product Idea Before You Build",
+  description: "Validate your product idea before you build. LaunchLens uses AI agents to research real community conversations and score your product-market fit in under 90 seconds.",
 };
 
 export default function RootLayout({
