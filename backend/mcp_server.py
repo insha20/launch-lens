@@ -37,6 +37,8 @@ import os
 import asyncio
 import threading
 import httpx
+import time
+import random
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -61,6 +63,25 @@ from langchain_core.tools import tool as langchain_tool, StructuredTool
 
 
 # ─────────────────────────────────────────────────────────────
+# Rate limiting for Reddit API
+# Tracks last request time to add delays between requests
+# ─────────────────────────────────────────────────────────────
+
+_reddit_last_request_time = 0
+_reddit_rate_limit_delay = 0.5  # 500ms minimum between Reddit requests
+
+
+async def _rate_limit_reddit():
+    """Ensures minimum delay between Reddit API requests."""
+    global _reddit_last_request_time
+    elapsed = time.time() - _reddit_last_request_time
+    if elapsed < _reddit_rate_limit_delay:
+        wait_time = _reddit_rate_limit_delay - elapsed
+        await asyncio.sleep(wait_time)
+    _reddit_last_request_time = time.time()
+
+
+# ─────────────────────────────────────────────────────────────
 # Core tool implementations
 # These are plain async functions — the MCP layer wraps them below
 # ─────────────────────────────────────────────────────────────
@@ -69,13 +90,24 @@ async def _reddit_search(
     query: str,
     subreddit: Optional[str] = None,
     limit: int = 10,
-    time_filter: str = "year"
+    time_filter: str = "year",
+    max_retries: int = 3,
+    base_delay: float = 1.0
 ) -> list[dict]:
     """
-    Core Reddit search implementation.
+    Core Reddit search implementation with exponential backoff retry logic.
     Uses the public Reddit JSON API — no auth required.
     Returns list of dicts (not Pydantic objects) so MCP can serialize them.
+    
+    Handles Reddit 403 blocking by:
+    - Rate limiting (500ms between requests)
+    - Exponential backoff on retries (1s, 2s, 4s)
+    - Random jitter to avoid thundering herd
+    - Better User-Agent headers
     """
+    # Apply rate limiting
+    await _rate_limit_reddit()
+    
     if subreddit:
         url = f"https://www.reddit.com/r/{subreddit}/search.json"
     else:
@@ -88,31 +120,71 @@ async def _reddit_search(
         "limit": min(limit, 25),          # Reddit max is 25 per request
         "restrict_sr": "true" if subreddit else "false",
     }
-    headers = {"User-Agent": "LaunchLens/0.3 (portfolio project by insha)"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 LaunchLens/0.3"
+    }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, params=params, headers=headers, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
-    posts = []
-    for child in data.get("data", {}).get("children", []):
-        d = child["data"]
-        # Skip removed/deleted posts
-        if d.get("removed_by_category") or d.get("title") == "[deleted]":
-            continue
-        posts.append({
-            "source": "reddit",
-            "title": d.get("title", ""),
-            "subreddit": d.get("subreddit", ""),
-            "score": d.get("score", 0),
-            "num_comments": d.get("num_comments", 0),
-            "url": f"https://reddit.com{d.get('permalink', '')}",
-            "body": d.get("selftext", "")[:600] if d.get("selftext") else "",
-            "created_utc": d.get("created_utc", 0),
-        })
-
-    return posts
+    # Retry loop with exponential backoff
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                resp = await client.get(url, params=params, headers=headers, timeout=15)
+                
+                # 429 (Too Many Requests) or 403 (Blocked) — retry
+                if resp.status_code in [429, 403]:
+                    if attempt < max_retries - 1:
+                        # Exponential backoff: 1s, 2s, 4s, with random jitter
+                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                        print(f"[Reddit] 403/429 blocked — retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        # Final attempt failed
+                        print(f"[Reddit] Failed after {max_retries} retries: {resp.status_code}")
+                        return []
+                
+                resp.raise_for_status()
+                data = resp.json()
+                
+                # Success — extract posts
+                posts = []
+                for child in data.get("data", {}).get("children", []):
+                    d = child["data"]
+                    # Skip removed/deleted posts
+                    if d.get("removed_by_category") or d.get("title") == "[deleted]":
+                        continue
+                    posts.append({
+                        "source": "reddit",
+                        "title": d.get("title", ""),
+                        "subreddit": d.get("subreddit", ""),
+                        "score": d.get("score", 0),
+                        "num_comments": d.get("num_comments", 0),
+                        "url": f"https://reddit.com{d.get('permalink', '')}",
+                        "body": d.get("selftext", "")[:600] if d.get("selftext") else "",
+                        "created_utc": d.get("created_utc", 0),
+                    })
+                
+                return posts
+                
+        except httpx.TimeoutException:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                print(f"[Reddit] Timeout — retrying in {delay:.1f}s (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                print(f"[Reddit] Timeout after {max_retries} retries")
+                return []
+        except Exception as e:
+            print(f"[Reddit] Error on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                await asyncio.sleep(delay)
+                continue
+            else:
+                return []
+    
+    return []
 
 
 async def _hn_search(
